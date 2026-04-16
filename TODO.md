@@ -1,13 +1,8 @@
-# SPARC Project - Virtual Environment Setup
+# SPARC Project - Various Tasks
 
-Previous fixes (logging, pyproject.toml, tests) complete.
+## sparc-api venv setup:
+- [x] Step 1: cd into sparc-api/ && python3 -m venv venv
+- [x] Step 2: source venv/bin/activate && pip install -r requirements.txt
+- [x] Step 3: uvicorn app.main:app --reload (Fixed pymongo & syntax errors)
 
-**Venv Steps (user request):**
-1. ✅ Created `.venv` with `python3 -m venv .venv`.
-2. ~~Activate: `source .venv/bin/activate` (run manually).~~
-3. ~~Sync deps: `pip install -e .` (no runtime deps needed).~~
-4. ~~Add [project.optional-dependencies.dev] for pytest/hatchling.~~
-5. ~~Verify tests and run in venv.~~
-
-Next: User activate venv, then run `pip install -e .` for editable install.
-
+## Previous fixes (logging, pyproject.toml, tests) complete.
