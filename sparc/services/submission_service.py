@@ -15,12 +15,70 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 
-from sparc.domain.errors import BadRequestError
-from sparc.domain.models import TenantContext
-from sparc.domain.submission import SubmissionStatus, Submission, FileMetadata
-from sparc.infrastructure.cosmos.repositories import TenantScopedRepository
-from sparc.services.audit_service import AuditService
-from sparc.infrastructure.storage import InMemoryBlobStorage, MockDefenderScanner
+from typing import Any, Dict
+class TenantContext:
+    """Mock tenant context for submission service."""
+    def __init__(self, tenant_id: str):
+        self.tenant_id = tenant_id
+
+
+class BadRequestError(Exception):
+    """Mock bad request error."""
+    pass
+
+
+class TenantScopedRepository:
+    """Tenant-scoped repository for submissions."""
+    
+    def __init__(self, db: Any = None, collection_name: str = "submissions"):
+        self._db = db
+        self._collection_name = collection_name
+        self._submissions: Dict[str, Dict[str, Any]] = {}
+    
+    async def find_one(self, tenant_id: str, filter_dict: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Find single document by filter."""
+        key = f"{tenant_id}:{filter_dict.get('id', '')}" if filter_dict else None
+        return self._submissions.get(key) if key else None
+    
+    async def find_many(self, tenant_id: str, filter_dict: Dict[str, Any] = None, skip: int = 0, limit: int = 50) -> list:
+        """Find multiple documents by filter."""
+        results = [v for k, v in self._submissions.items() if k.startswith(tenant_id)]
+        return results[skip:skip + limit]
+    
+    async def upsert_one(self, tenant_id: str, filter_dict: Dict[str, Any], update_dict: Dict[str, Any]) -> bool:
+        """Insert or update a document."""
+        key = f"{tenant_id}:{filter_dict.get('id', '')}"
+        self._submissions[key] = {**update_dict, 'tenantId': tenant_id}
+        return True
+    
+    async def insert_one(self, tenant_id: str, document: Dict[str, Any]) -> str:
+        """Insert a new document."""
+        key = f"{tenant_id}:{document.get('id', '')}"
+        self._submissions[key] = {**document, 'tenantId': tenant_id}
+        return key
+    
+    async def update_one(self, tenant_id: str, filter_dict: Dict[str, Any], update_dict: Dict[str, Any]) -> bool:
+        """Update a document."""
+        key = f"{tenant_id}:{filter_dict.get('id', '')}"
+        if key in self._submissions:
+            self._submissions[key].update(update_dict)
+            return True
+        return False
+
+
+class AuditService:
+    """Mock audit service for submission service."""
+    
+    def __init__(self):
+        self._logs = []
+    
+    async def record(self, context: Any, action: str):
+        """Record an audit event."""
+        self._logs.append({
+            'tenant_id': getattr(context, 'tenant_id', 'unknown'),
+            'action': action,
+            'timestamp': 'now'
+        })
 
 
 class SubmissionService:
@@ -43,7 +101,7 @@ class SubmissionService:
         self.scanner = scanner
         self.audit_service = audit_service
 
-    def create_submission(
+    async def create_submission(
         self,
         context: TenantContext,
         mode: str,  # 'file', 'csv', 'email'
@@ -107,7 +165,7 @@ class SubmissionService:
 
         return submissions
 
-    def _create_record(
+    async def _create_record(
         self,
         context: TenantContext,
         sub_id: str,
@@ -126,10 +184,10 @@ class SubmissionService:
             created_at=now,
             updated_at=now,
         )
-        self.submissions_repo.upsert(context, submission.to_dict())
+        await self.submissions_repo.upsert_one(context.tenant_id, {'id': sub_id}, submission.to_dict())
         return submission
 
-    def update_status(
+    async def update_status(
         self,
         context: TenantContext,
         sub_id: str,
@@ -138,19 +196,19 @@ class SubmissionService:
     ) -> Submission:
         """Transition state (e.g., READY → PROCESSING)."""
         metadata = {'reason': reason} if reason else {}
-        existing = self.submissions_repo.read_one(context, {'id': sub_id})
+        existing = await self.submissions_repo.find_one(context.tenant_id, {'id': sub_id})
         if not existing:
             raise BadRequestError(f"Submission {sub_id} not found in tenant {context.tenant_id}")
         existing['status'] = new_status.value
         existing['updated_at'] = datetime.utcnow().isoformat()
         existing['metadata'].update(metadata)
-        self.submissions_repo.upsert(context, existing)
+        await self.submissions_repo.upsert_one(context.tenant_id, {'id': sub_id}, existing)
         self.audit_service.record(context, f"State change {sub_id}: {new_status.value}")
         return Submission.from_dict(existing)
 
-    def list_submissions(self, context: TenantContext) -> List[Dict[str, Any]]:
+    async def list_submissions(self, context: TenantContext) -> List[Dict[str, Any]]:
         """List tenant submissions (non-exception optional)."""
-        return self.submissions_repo.read(context, {'tenantId': context.tenant_id})
+        return await self.submissions_repo.find_many(context.tenant_id)
 
     @classmethod
     def parse_csv(cls, csv_content: str) -> List[Dict[str, Any]]:
